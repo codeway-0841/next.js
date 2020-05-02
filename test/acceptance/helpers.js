@@ -28,6 +28,13 @@ export async function sandbox(id = nanoid()) {
 
   return [
     {
+      async write(fileName, content) {
+        // Update the file on filesystem
+        const fullFileName = path.join(sandboxDirectory, fileName)
+        const dir = path.dirname(fullFileName)
+        await fs.mkdirp(dir)
+        await fs.writeFile(fullFileName, content)
+      },
       async patch(fileName, content) {
         // Register an event for HMR completion
         await browser.executeScript(function() {
@@ -35,18 +42,14 @@ export async function sandbox(id = nanoid()) {
 
           var timeout = setTimeout(() => {
             window.__HMR_STATE = 'timeout'
-          }, 5250)
+          }, 10000)
           window.__NEXT_HMR_CB = function() {
             clearTimeout(timeout)
             window.__HMR_STATE = 'success'
           }
         })
 
-        // Update the file on filesystem
-        const fullFileName = path.join(sandboxDirectory, fileName)
-        const dir = path.dirname(fullFileName)
-        await fs.mkdirp(dir)
-        await fs.writeFile(fullFileName, content)
+        await this.write(fileName, content)
 
         for (;;) {
           const status = await browser.executeScript(() => window.__HMR_STATE)
@@ -112,6 +115,40 @@ export async function sandbox(id = nanoid()) {
         return browser.eval(
           `document.querySelector('iframe').contentWindow.document.body.innerHTML`
         )
+      },
+      async hasRedbox(expected = false) {
+        let attempts = 3
+        do {
+          const has = await this.evaluate(() => {
+            return Boolean(
+              [].slice
+                .call(document.querySelectorAll('nextjs-portal'))
+                .find(p =>
+                  p.shadowRoot.querySelector('#nextjs__container_errors_label')
+                )
+            )
+          })
+          if (has) {
+            return true
+          }
+          if (--attempts < 0) {
+            break
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        } while (expected)
+        return false
+      },
+      async getRedboxSource() {
+        return this.evaluate(() => {
+          const portal = [].slice
+            .call(document.querySelectorAll('nextjs-portal'))
+            .find(p =>
+              p.shadowRoot.querySelector('#nextjs__container_errors_label')
+            )
+          const root = portal.shadowRoot
+          return root.querySelector('[data-nextjs-codeframe]').innerText
+        })
       },
     },
     function cleanup() {
